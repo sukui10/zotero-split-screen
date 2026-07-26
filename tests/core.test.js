@@ -5,6 +5,7 @@ const vm = require("node:vm");
 
 const projectRoot = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(projectRoot, "split-screen.js"), "utf8");
+const stylesheet = fs.readFileSync(path.join(projectRoot, "workspace.css"), "utf8");
 const itemsByID = new Map();
 const context = {
 	ZoteroSplitScreen: null,
@@ -108,6 +109,60 @@ const plugin = context.ZoteroSplitScreen;
 assert.equal(plugin._clampNumber(10, 20, 40, 30), 20);
 assert.equal(plugin._clampNumber(50, 20, 40, 30), 40);
 assert.equal(plugin._clampNumber("bad", 20, 40, 30), 30);
+assert.equal(plugin._getResponsiveNotesMaximum({ innerWidth: 2048 }), 680);
+assert.equal(plugin._getResponsiveNotesMaximum({ innerWidth: 900 }), 432);
+assert.equal(plugin._getResponsiveNotesMaximum({ innerWidth: 500 }), 320);
+
+{
+	const originalApply = plugin._applyPanelState;
+	const originalSchedule = plugin._scheduleRelationOverlay;
+	plugin._applyPanelState = () => {};
+	plugin._scheduleRelationOverlay = () => {};
+	let compact = false;
+	const responsiveSession = {
+		root: {
+			isConnected: true,
+			toggleAttribute(_name, enabled) { compact = enabled; }
+		},
+		content: { getBoundingClientRect: () => ({ width: 1000 }) },
+		win: { innerWidth: 1000 },
+		notesCollapsed: false,
+		notesWidth: 600,
+		notesWidthRatio: 0.4
+	};
+	plugin._adaptWorkspaceToSize(responsiveSession);
+	assert.equal(responsiveSession.notesWidth, 400);
+	assert.equal(compact, true);
+	responsiveSession.content.getBoundingClientRect = () => ({ width: 2000 });
+	responsiveSession.win.innerWidth = 2000;
+	plugin._adaptWorkspaceToSize(responsiveSession);
+	assert.equal(responsiveSession.notesWidth, 680);
+	assert.equal(compact, false);
+	plugin._applyPanelState = originalApply;
+	plugin._scheduleRelationOverlay = originalSchedule;
+}
+
+assert.equal(plugin._getWorkspaceAvailableWidth({
+	win: { innerWidth: 1536 },
+	container: { clientWidth: 2200, getBoundingClientRect: () => ({ width: 2200 }) },
+	content: { clientWidth: 2100, getBoundingClientRect: () => ({ width: 2100 }) }
+}), 1536);
+
+{
+	const relations = plugin._sanitizeRelations([{
+		id: "relation-1",
+		type: "contradict",
+		label: "结论矛盾",
+		start: { attachmentID: 1, pageIndex: 2, quote: "A conclusion", x: -2, y: 0.4 },
+		end: { attachmentID: 3, pageIndex: 8, quote: "B conclusion", x: 3, y: 0.7 }
+	}]);
+	assert.equal(relations.length, 1);
+	assert.equal(relations[0].type, "contradict");
+	assert.equal(relations[0].start.x, 0);
+	assert.equal(relations[0].end.x, 1);
+	assert.equal(plugin._getRelationType("missing").id, "custom");
+	assert.equal(plugin._sanitizeRelations([{ start: null, end: null }]).length, 0);
+}
 
 {
 	const dropped = plugin._extractDroppedComparisonText({
@@ -129,6 +184,27 @@ assert.doesNotMatch(source, /session\.sources\s*=\s*attachments\.slice/);
 assert.match(source, /editor\.mode\s*=\s*"edit"/);
 assert.match(source, /_makeNativeNoteResponsive\(editor\)/);
 assert.match(source, /zss-responsive-note-style/);
+assert.match(source, /_installRelationSelectionTracking/);
+assert.match(source, /_renderRelationOverlay/);
+assert.match(source, /extensions\.zotero-split-screen\.relations/);
+assert.match(source, /addEventListener\("selectionchange", captureNow, true\)/);
+assert.match(source, /addEventListener\("pointerup", capture, true\)/);
+assert.match(source, /pane\.relationButton\?\.removeAttribute\("disabled"\)/);
+assert.doesNotMatch(source, /Services\.prompt\.select/);
+assert.match(source, /zss-relation-type-select/);
+assert.match(source, /zss-relation-label-input/);
+assert.match(source, /new session\.win\.ResizeObserver/);
+assert.match(source, /notesWidthRatio/);
+assert.match(source, /data-zss-compact/);
+assert.match(source, /_beginNotesResize/);
+assert.doesNotMatch(source, /svg\.setAttribute\("width"/);
+assert.doesNotMatch(source, /svg\.setAttribute\("height"/);
+assert.match(source, /session\.relationOverlay\?\.remove\(\)/);
+assert.match(stylesheet, /\.zss-relation-overlay\s*\{[\s\S]*?width:\s*100%/);
+assert.match(stylesheet, /\.zss-notes\s*\{[\s\S]*?max-width:\s*min\(48vw, 680px\)/);
+assert.match(stylesheet, /\.zss-reader-grid\s*\{[\s\S]*?width:\s*0;/);
+assert.match(stylesheet, /\.zss-grid-row\[orient="horizontal"\]\s*>\s*\.zss-reader-pane/);
+assert.match(stylesheet, /\.zss-workspace\[data-zss-compact\]\s+\.zss-notes/);
 assert.match(source, /收回 ›/);
 
 console.log("Core tests passed");

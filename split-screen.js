@@ -9,6 +9,18 @@ ZoteroSplitScreen = {
 	sessions: new Map(),
 	maxSources: 12,
 	maxPanes: 4,
+	maxRelations: 120,
+	relationTypes: [
+		{ id: "support", label: "佐证", color: "#2f8f57", dash: "" },
+		{ id: "contradict", label: "矛盾", color: "#c53b45", dash: "" },
+		{ id: "method-similar", label: "方法相似", color: "#3478c5", dash: "" },
+		{ id: "method-improve", label: "方法改进", color: "#7557c8", dash: "" },
+		{ id: "sample-difference", label: "样本差异", color: "#d17a22", dash: "7 5" },
+		{ id: "definition-difference", label: "定义差异", color: "#a48119", dash: "3 4" },
+		{ id: "cause", label: "因果关系", color: "#148d91", dash: "" },
+		{ id: "extension", label: "扩展研究", color: "#8a4f9f", dash: "5 4" },
+		{ id: "custom", label: "自定义", color: "#59636f", dash: "" }
+	],
 	comparisonFields: [
 		["question", "研究问题"],
 		["theory", "理论 / 假设"],
@@ -80,6 +92,14 @@ ZoteroSplitScreen = {
 
 	_createHTML(doc, name, attributes = {}) {
 		let element = doc.createElementNS("http://www.w3.org/1999/xhtml", name);
+		for (let [key, value] of Object.entries(attributes)) {
+			element.setAttribute(key, String(value));
+		}
+		return element;
+	},
+
+	_createSVG(doc, name, attributes = {}) {
+		let element = doc.createElementNS("http://www.w3.org/2000/svg", name);
 		for (let [key, value] of Object.entries(attributes)) {
 			element.setAttribute(key, String(value));
 		}
@@ -235,6 +255,13 @@ ZoteroSplitScreen = {
 		let uiState = this._readJSONPref("extensions.zotero-split-screen.ui-state", {});
 		let workspaceKey = "extensions.zotero-split-screen.workspace." + comparisonID;
 		let workspaceState = this._readJSONPref(workspaceKey, {});
+		let initialViewportWidth = Number(win?.innerWidth) || 1024;
+		let initialNotesWidth = this._clampNumber(
+			uiState.notesWidth,
+			320,
+			this._getResponsiveNotesMaximum(win, initialViewportWidth),
+			400
+		);
 		let tab = win.Zotero_Tabs.add({
 			type: "zss-comparison",
 			title: "论文对比",
@@ -268,13 +295,28 @@ ZoteroSplitScreen = {
 			noteKey: "extensions.zotero-split-screen.notes." + comparisonID,
 			noteIDKey: "extensions.zotero-split-screen.note-id." + comparisonID,
 			structuredKey: "extensions.zotero-split-screen.structured." + comparisonID,
+			relationsKey: "extensions.zotero-split-screen.relations." + comparisonID,
 			noteWritePromise: Promise.resolve(),
+			relations: [],
+			pendingRelationStart: null,
+			relationRAF: null,
+			relationsVisible: uiState.relationsVisible !== false,
+			lastRelationType: uiState.lastRelationType || "support",
 			sourcesCollapsed: Boolean(uiState.sourcesCollapsed),
 			notesCollapsed: Boolean(uiState.notesCollapsed),
 			sourcesWidth: this._clampNumber(uiState.sourcesWidth, 170, 320, 210),
-			notesWidth: this._clampNumber(uiState.notesWidth, 320, 520, 400),
-			noteView: uiState.noteView === "structured" ? "structured" : "native"
+			notesWidth: initialNotesWidth,
+			notesWidthRatio: this._clampNumber(
+				uiState.notesWidthRatio,
+				0.18,
+				0.48,
+				initialNotesWidth / initialViewportWidth
+			),
+			noteView: ["native", "structured", "relations"].includes(uiState.noteView)
+				? uiState.noteView
+				: "native"
 		};
+		session.relations = this._sanitizeRelations(this._readJSONPref(session.relationsKey, []));
 		this.sessions.set(tab.id, session);
 		return session;
 	},
@@ -282,6 +324,9 @@ ZoteroSplitScreen = {
 	_buildWorkspace(session) {
 		let doc = session.win.document;
 		session.container.setAttribute("flex", "1");
+		session.container.style.minWidth = "0";
+		session.container.style.maxWidth = "100%";
+		session.container.style.overflow = "hidden";
 		let root = this._createXUL(doc, "vbox", { flex: 1, class: "zss-workspace" });
 		session.root = root;
 
@@ -308,6 +353,10 @@ ZoteroSplitScreen = {
 		this._appendToolbarButton(doc, toolbar, "对齐当前页", "将各窗格当前页设为同一个语义起点，再进行相对同步", () => {
 			this.alignCurrentPages(session);
 		});
+		this._appendToolbarButton(doc, toolbar, "关系图", "查看跨文献连线和关系卡片", () => {
+			if (session.notesCollapsed) this._toggleSidePanel(session, "notes");
+			this._setNoteView(session, "relations");
+		});
 		let moreButton = this._createXUL(doc, "toolbarbutton", {
 			label: "更多",
 			type: "menu",
@@ -323,6 +372,7 @@ ZoteroSplitScreen = {
 		root.appendChild(toolbar);
 
 		let content = this._createXUL(doc, "hbox", { flex: 1, class: "zss-content" });
+		session.content = content;
 		let sources = this._createXUL(doc, "vbox", { class: "zss-sources" });
 		sources.style.width = `${session.sourcesWidth}px`;
 		let sourceHeader = this._createXUL(doc, "hbox", { align: "center", class: "zss-panel-heading" });
@@ -394,15 +444,18 @@ ZoteroSplitScreen = {
 		let noteTabs = this._createXUL(doc, "hbox", { class: "zss-note-tabs" });
 		let nativeTab = this._createXUL(doc, "toolbarbutton", { label: "Zotero 笔记", class: "zss-note-tab" });
 		let structuredTab = this._createXUL(doc, "toolbarbutton", { label: "结构化对比", class: "zss-note-tab" });
+		let relationsTab = this._createXUL(doc, "toolbarbutton", { label: "关系图", class: "zss-note-tab" });
 		nativeTab.addEventListener("command", () => this._setNoteView(session, "native"));
 		structuredTab.addEventListener("command", () => this._setNoteView(session, "structured"));
-		noteTabs.append(nativeTab, structuredTab);
+		relationsTab.addEventListener("command", () => this._setNoteView(session, "relations"));
+		noteTabs.append(nativeTab, structuredTab, relationsTab);
 		notesBody.appendChild(noteTabs);
 		let noteDeck = this._createXUL(doc, "deck", { flex: 1, class: "zss-note-deck" });
 		let nativeHost = this._createXUL(doc, "vbox", { flex: 1, class: "zss-native-note-host" });
 		nativeHost.appendChild(this._createXUL(doc, "label", { value: "正在加载 Zotero 笔记…", class: "zss-note-loading" }));
 		let structuredHost = this._createXUL(doc, "vbox", { flex: 1, class: "zss-structured-host" });
-		noteDeck.append(nativeHost, structuredHost);
+		let relationsHost = this._createXUL(doc, "vbox", { flex: 1, class: "zss-relations-host" });
+		noteDeck.append(nativeHost, structuredHost, relationsHost);
 		notesBody.appendChild(noteDeck);
 		let noteActions = this._createXUL(doc, "hbox", { class: "zss-note-actions", align: "center" });
 		let noteStatus = this._createXUL(doc, "label", { flex: 1, value: "", class: "zss-note-status" });
@@ -413,12 +466,14 @@ ZoteroSplitScreen = {
 		notes.appendChild(notesBody);
 		session.notesBody = notesBody;
 		session.notesCollapseButton = collapseNotes;
-		session.noteTabs = { native: nativeTab, structured: structuredTab };
+		session.noteTabs = { native: nativeTab, structured: structuredTab, relations: relationsTab };
 		session.noteDeck = noteDeck;
 		session.nativeNoteHost = nativeHost;
 		session.structuredHost = structuredHost;
+		session.relationsHost = relationsHost;
 		session.noteStatus = noteStatus;
 		this._buildStructuredPanel(session);
+		this._buildRelationsPanel(session);
 		this._applyPanelState(session, "notes");
 		this._setNoteView(session, session.noteView);
 		let noteSplitter = this._createXUL(doc, "splitter", {
@@ -427,6 +482,7 @@ ZoteroSplitScreen = {
 			resizeafter: "closest"
 		});
 		noteSplitter.addEventListener("mouseup", () => this._rememberPanelWidths(session));
+		noteSplitter.addEventListener("mousedown", event => this._beginNotesResize(session, event));
 		session.noteSplitter = noteSplitter;
 		this._applyPanelState(session, "notes");
 
@@ -445,6 +501,17 @@ ZoteroSplitScreen = {
 		for (let index = 0; index < visibleCount; index++) {
 			session.panes.push(this._createPane(session, orderedSources[index]));
 		}
+		session.relationWindowResize = () => this._adaptWorkspaceToSize(session);
+		session.win.addEventListener("resize", session.relationWindowResize);
+		if (session.win.ResizeObserver) {
+			session.workspaceResizeObserver = new session.win.ResizeObserver(() => {
+				this._adaptWorkspaceToSize(session);
+			});
+			session.workspaceResizeObserver.observe(content);
+		}
+		session.screenChangeListener = () => this._adaptWorkspaceToSize(session);
+		session.win.screen?.addEventListener?.("change", session.screenChangeListener);
+		session.win.setTimeout(() => this._adaptWorkspaceToSize(session), 0);
 	},
 
 	_appendToolbarButton(doc, toolbar, label, tooltip, command, attributes = {}) {
@@ -481,16 +548,22 @@ ZoteroSplitScreen = {
 			tooltiptext: "选择此窗格要显示的文献",
 			class: "zss-pane-switch"
 		});
+		let relationButton = this._createXUL(doc, "toolbarbutton", {
+			label: "设为起点",
+			tooltiptext: "先在 PDF 中选中文字，再建立跨文献关系",
+			class: "zss-pane-relation"
+		});
 		let switchPopup = this._createXUL(doc, "menupopup");
 		switchButton.appendChild(switchPopup);
-		header.append(marker, title, previousButton, nextButton, switchButton);
+		header.append(marker, title, previousButton, nextButton, relationButton, switchButton);
 		let host = this._createXUL(doc, "vbox", { flex: 1, class: "zss-preview-host" });
 		let popupset = this._createXUL(doc, "popupset");
 		root.append(header, host, popupset);
 
 		let pane = {
-			root, header, marker, title, previousButton, nextButton, switchButton, switchPopup, host, popupset,
-			attachment: null, preview: null, loadToken: 0, disposed: false
+			root, header, marker, title, previousButton, nextButton, relationButton, switchButton, switchPopup, host, popupset,
+			attachment: null, preview: null, loadToken: 0, disposed: false,
+			lastRelationAnchor: null, relationCleanup: []
 		};
 		let setActive = () => this._setActivePane(session, session.panes.indexOf(pane));
 		root.addEventListener("mousedown", setActive, true);
@@ -506,6 +579,11 @@ ZoteroSplitScreen = {
 			setActive();
 			this._goActive(session, "next");
 		});
+		relationButton.addEventListener("command", event => {
+			event.stopPropagation();
+			setActive();
+			this._usePaneSelectionAsRelationEndpoint(session, pane);
+		});
 		this._setPaneAttachment(session, pane, attachment);
 		return pane;
 	},
@@ -520,8 +598,10 @@ ZoteroSplitScreen = {
 		}
 		pane.loading = true;
 		try {
+			this._detachRelationTracking(pane);
 			pane.preview?.uninit();
 			pane.preview = null;
+			pane.lastRelationAnchor = null;
 			pane.host.replaceChildren();
 			pane.attachment = attachment;
 			pane.title.setAttribute("value", this._getAttachmentTitle(attachment));
@@ -558,7 +638,7 @@ ZoteroSplitScreen = {
 				preview.uninit();
 				return;
 			}
-			this._enablePDFInteraction(preview);
+			this._enablePDFInteraction(session, pane, preview);
 			pane.preview = preview;
 			let savedPage = Number(session.savedPages?.[attachment.id]);
 			if (Number.isInteger(savedPage) && savedPage > 0) {
@@ -566,6 +646,7 @@ ZoteroSplitScreen = {
 			}
 			this._renderSources(session);
 			this._persistWorkspaceState(session);
+			this._scheduleRelationOverlay(session);
 		}
 		catch (error) {
 			if (pane.disposed || token !== pane.loadToken) return;
@@ -585,7 +666,7 @@ ZoteroSplitScreen = {
 		}
 	},
 
-	_enablePDFInteraction(preview) {
+	_enablePDFInteraction(session, pane, preview) {
 		let readerWindow = preview?._internalReader?._primaryView?._iframeWindow;
 		let viewer = readerWindow?.PDFViewerApplication?.pdfViewer;
 		if (!readerWindow || !viewer) return;
@@ -601,10 +682,219 @@ ZoteroSplitScreen = {
 				.textLayer { pointer-events: auto !important; user-select: text !important; }
 			`;
 			readerWindow.document.head.appendChild(style);
+			this._installRelationSelectionTracking(session, pane, readerWindow, viewer);
 		}
 		catch (error) {
 			Zotero.logError(error);
 		}
+	},
+
+	_installRelationSelectionTracking(session, pane, readerWindow, viewer) {
+		this._detachRelationTracking(pane);
+		let captureNow = () => {
+			let anchor = this._captureSelectionAnchor(pane, readerWindow, viewer);
+			if (!anchor) return false;
+			pane.lastRelationAnchor = anchor;
+			this._setActivePane(session, session.panes.indexOf(pane));
+			this._refreshRelationButtons(session);
+			this._setNoteStatus(session, `已捕获第 ${anchor.pageIndex + 1} 页文本：${anchor.quote.slice(0, 38)}`);
+			return true;
+		};
+		let capture = () => {
+			// Zotero opens its native annotation popup immediately after mouseup.
+			// Capture synchronously first, before that popup can replace the PDF DOM
+			// selection, and retry once on the next frame for keyboard selections.
+			captureNow();
+			readerWindow.requestAnimationFrame(captureNow);
+		};
+		let schedule = () => this._scheduleRelationOverlay(session);
+		let viewerContainer = readerWindow.document.getElementById("viewerContainer");
+		readerWindow.document.addEventListener("selectionchange", captureNow, true);
+		readerWindow.document.addEventListener("pointerup", capture, true);
+		readerWindow.document.addEventListener("mouseup", capture, true);
+		readerWindow.document.addEventListener("keyup", capture, true);
+		readerWindow.addEventListener("resize", schedule);
+		viewerContainer?.addEventListener("scroll", schedule, { passive: true });
+		pane.relationCleanup = [
+			() => readerWindow.document.removeEventListener("selectionchange", captureNow, true),
+			() => readerWindow.document.removeEventListener("pointerup", capture, true),
+			() => readerWindow.document.removeEventListener("mouseup", capture, true),
+			() => readerWindow.document.removeEventListener("keyup", capture, true),
+			() => readerWindow.removeEventListener("resize", schedule),
+			() => viewerContainer?.removeEventListener("scroll", schedule)
+		];
+	},
+
+	_detachRelationTracking(pane) {
+		for (let cleanup of pane?.relationCleanup || []) {
+			try { cleanup(); }
+			catch (error) { Zotero.logError(error); }
+		}
+		if (pane) pane.relationCleanup = [];
+	},
+
+	_captureSelectionAnchor(pane, readerWindow, viewer) {
+		try {
+			let selection = readerWindow.getSelection();
+			let quote = selection?.toString?.().replace(/\s+/g, " ").trim();
+			if (!quote || quote.length < 2 || selection.rangeCount < 1) return null;
+			quote = quote.slice(0, 1000);
+			let range = selection.getRangeAt(0);
+			let node = range.startContainer?.nodeType === 1
+				? range.startContainer
+				: range.startContainer?.parentElement;
+			let page = node?.closest?.(".page");
+			let pageNumber = Number(page?.dataset?.pageNumber)
+				|| Number(viewer?.currentPageNumber)
+				|| 1;
+			let pageRect = page?.getBoundingClientRect?.();
+			let selectionRect = Array.from(range.getClientRects?.() || [])
+				.find(rect => rect.width > 0 && rect.height > 0)
+				|| range.getBoundingClientRect?.();
+			let x = pageRect?.width && selectionRect
+				? (selectionRect.left + selectionRect.width / 2 - pageRect.left) / pageRect.width
+				: 0.5;
+			let y = pageRect?.height && selectionRect
+				? (selectionRect.top + selectionRect.height / 2 - pageRect.top) / pageRect.height
+				: 0.5;
+			let pageText = page?.textContent || "";
+			let rawQuote = selection.toString();
+			let quoteIndex = pageText.indexOf(rawQuote);
+			return {
+				id: this._makeRelationID("anchor"),
+				attachmentID: Number(pane.attachment?.id),
+				pageIndex: Math.max(0, pageNumber - 1),
+				pageLabel: String(pageNumber),
+				quote,
+				prefix: quoteIndex >= 0 ? pageText.slice(Math.max(0, quoteIndex - 80), quoteIndex) : "",
+				suffix: quoteIndex >= 0 ? pageText.slice(quoteIndex + rawQuote.length, quoteIndex + rawQuote.length + 80) : "",
+				x: this._clampNumber(x, 0, 1, 0.5),
+				y: this._clampNumber(y, 0, 1, 0.5),
+				title: this._getAttachmentTitle(pane.attachment).slice(0, 300)
+			};
+		}
+		catch (error) {
+			Zotero.logError(error);
+			return null;
+		}
+	},
+
+	_usePaneSelectionAsRelationEndpoint(session, pane) {
+		let readerWindow = pane?.preview?._internalReader?._primaryView?._iframeWindow;
+		let viewer = readerWindow?.PDFViewerApplication?.pdfViewer;
+		let liveAnchor = readerWindow && viewer
+			? this._captureSelectionAnchor(pane, readerWindow, viewer)
+			: null;
+		if (liveAnchor) pane.lastRelationAnchor = liveAnchor;
+		let anchor = pane?.lastRelationAnchor;
+		if (!anchor || anchor.attachmentID !== pane.attachment?.id) {
+			this._alert(session.win, "建立文献关系", "请先在这个 PDF 中用鼠标选中一句话或一段文字。");
+			return;
+		}
+		if (!session.pendingRelationStart) {
+			session.pendingRelationStart = { ...anchor };
+			this._refreshRelationButtons(session);
+			this._renderRelationsPanel(session);
+			this._setNoteStatus(session, "关系起点已设置，请在另一篇文献中选择文本并点击“连接”");
+			return;
+		}
+		let start = session.pendingRelationStart;
+		if (start.attachmentID === anchor.attachmentID
+			&& start.pageIndex === anchor.pageIndex
+			&& start.quote === anchor.quote) {
+			this._alert(session.win, "建立文献关系", "起点和终点不能是同一段文字。");
+			return;
+		}
+		let defaultType = this._getRelationType(session.lastRelationType || "support");
+		let relation = {
+			id: this._makeRelationID("relation"),
+			type: defaultType.id,
+			label: defaultType.label,
+			start: { ...start },
+			end: { ...anchor },
+			createdAt: Date.now(),
+			updatedAt: Date.now()
+		};
+		session.relations.push(relation);
+		if (session.relations.length > this.maxRelations) session.relations.shift();
+		session.pendingRelationStart = null;
+		this._persistRelations(session);
+		this._refreshRelationButtons(session);
+		this._renderRelationsPanel(session, relation.id);
+		this._scheduleRelationOverlay(session);
+		if (session.notesCollapsed) this._toggleSidePanel(session, "notes");
+		this._setNoteView(session, "relations");
+		this._setNoteStatus(session, `已建立“${this._getRelationType(relation.type).label}”关系`);
+	},
+
+	_cancelPendingRelation(session) {
+		session.pendingRelationStart = null;
+		this._refreshRelationButtons(session);
+		this._renderRelationsPanel(session);
+		this._setNoteStatus(session, "已取消关系起点");
+	},
+
+	_refreshRelationButtons(session) {
+		for (let pane of session?.panes || []) {
+			let available = pane.lastRelationAnchor?.attachmentID === pane.attachment?.id;
+			pane.relationButton?.toggleAttribute("data-zss-ready", available);
+			pane.relationButton?.removeAttribute("disabled");
+			pane.relationButton?.setAttribute("label", session.pendingRelationStart
+				? (available ? "连接" : "选择后连接")
+				: (available ? "已选 · 设起点" : "设为起点"));
+			pane.relationButton?.setAttribute("tooltiptext", available
+				? (session.pendingRelationStart
+					? `连接到起点：${session.pendingRelationStart.quote.slice(0, 45)}`
+					: `设为起点：${pane.lastRelationAnchor.quote.slice(0, 45)}`)
+				: "先在 PDF 中选中文字");
+		}
+	},
+
+	_makeRelationID(prefix) {
+		return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+	},
+
+	_getRelationType(typeID) {
+		return this.relationTypes.find(type => type.id === typeID) || this.relationTypes[this.relationTypes.length - 1];
+	},
+
+	_sanitizeRelations(value) {
+		if (!Array.isArray(value)) return [];
+		let cleanAnchor = anchor => {
+			if (!anchor || !Number.isInteger(Number(anchor.attachmentID))) return null;
+			return {
+				id: String(anchor.id || this._makeRelationID("anchor")),
+				attachmentID: Number(anchor.attachmentID),
+				pageIndex: Math.max(0, Number(anchor.pageIndex) || 0),
+				pageLabel: String(anchor.pageLabel || Number(anchor.pageIndex || 0) + 1),
+				quote: String(anchor.quote || "").slice(0, 1000),
+				prefix: String(anchor.prefix || "").slice(-120),
+				suffix: String(anchor.suffix || "").slice(0, 120),
+				x: this._clampNumber(anchor.x, 0, 1, 0.5),
+				y: this._clampNumber(anchor.y, 0, 1, 0.5),
+				title: String(anchor.title || "").slice(0, 300)
+			};
+		};
+		return value.slice(-this.maxRelations).map(relation => {
+			let start = cleanAnchor(relation?.start);
+			let end = cleanAnchor(relation?.end);
+			if (!start || !end || !start.quote || !end.quote) return null;
+			return {
+				id: String(relation.id || this._makeRelationID("relation")),
+				type: this._getRelationType(relation.type).id,
+				label: String(relation.label || this._getRelationType(relation.type).label).slice(0, 120),
+				start,
+				end,
+				createdAt: Number(relation.createdAt) || Date.now(),
+				updatedAt: Number(relation.updatedAt) || Number(relation.createdAt) || Date.now()
+			};
+		}).filter(Boolean);
+	},
+
+	_persistRelations(session) {
+		if (!session?.relationsKey) return;
+		this._writeJSONPref(session.relationsKey, session.relations);
+		this._rememberPanelWidths(session);
 	},
 
 	_waitForPreviewFrame(win, host, browser) {
@@ -666,6 +956,8 @@ ZoteroSplitScreen = {
 			secondRow.hidden = session.layout !== "grid" || count < 3;
 		}
 		this._setActivePane(session, Math.min(session.activePaneIndex, Math.max(0, count - 1)));
+		this._refreshRelationButtons(session);
+		this._scheduleRelationOverlay(session);
 	},
 
 	_renderSources(session) {
@@ -746,12 +1038,13 @@ ZoteroSplitScreen = {
 	_setActivePane(session, index) {
 		if (!Number.isInteger(index) || index < 0 || !session.panes[index]) return;
 		session.activePaneIndex = index;
-		session.panes.forEach((pane, paneIndex) => {
+			session.panes.forEach((pane, paneIndex) => {
 			pane.root.toggleAttribute("data-zss-active", paneIndex === index);
 			let slot = String.fromCharCode(65 + paneIndex);
 			pane.root.setAttribute("data-zss-slot", slot);
 			pane.marker.setAttribute("value", paneIndex === index ? `${slot} · 主` : slot);
 		});
+		this._refreshRelationButtons(session);
 	},
 
 	setLayout(session, layout) {
@@ -763,6 +1056,7 @@ ZoteroSplitScreen = {
 		this._setPaneCount(session, targetCount);
 		this._renderPanes(session);
 		this._persistWorkspaceState(session);
+		this._scheduleRelationOverlay(session);
 	},
 
 	_swapPrimaryPanes(session) {
@@ -799,10 +1093,43 @@ ZoteroSplitScreen = {
 		panel.toggleAttribute("data-zss-collapsed", collapsed);
 		panel.style.width = `${collapsed ? 34 : width}px`;
 		panel.style.minWidth = `${collapsed ? 34 : Math.min(width, isSources ? 170 : 320)}px`;
+		if (!isSources) {
+			session.root?.style.setProperty("--zss-notes-width", `${collapsed ? 34 : width}px`);
+		}
 		if (button) button.setAttribute("label", isSources
 			? (collapsed ? "›" : "‹")
 			: (collapsed ? "‹" : "收回 ›"));
 		if (splitter) splitter.hidden = collapsed;
+		this._scheduleRelationOverlay(session);
+	},
+
+	_beginNotesResize(session, event) {
+		if (!session || session.notesCollapsed || event.button !== 0) return;
+		event.preventDefault();
+		event.stopPropagation();
+		session.noteResizeCleanup?.();
+		let startX = event.clientX;
+		let startWidth = session.notesPanel?.getBoundingClientRect?.().width || session.notesWidth;
+		let onMove = moveEvent => {
+			let availableWidth = this._getWorkspaceAvailableWidth(session);
+			let maximum = this._getResponsiveNotesMaximum(session.win, availableWidth);
+			session.notesWidth = this._clampNumber(
+				Math.round(startWidth + startX - moveEvent.clientX),
+				320,
+				maximum,
+				session.notesWidth
+			);
+			this._applyPanelState(session, "notes");
+		};
+		let onUp = () => {
+			session.win.removeEventListener("mousemove", onMove, true);
+			session.win.removeEventListener("mouseup", onUp, true);
+			session.noteResizeCleanup = null;
+			this._rememberPanelWidths(session);
+		};
+		session.noteResizeCleanup = onUp;
+		session.win.addEventListener("mousemove", onMove, true);
+		session.win.addEventListener("mouseup", onUp, true);
 	},
 
 	_rememberPanelWidths(session) {
@@ -813,14 +1140,31 @@ ZoteroSplitScreen = {
 		}
 		if (!session.notesCollapsed && session.notesPanel) {
 			let width = session.notesPanel.getBoundingClientRect().width;
-			if (width >= 100) session.notesWidth = this._clampNumber(width, 320, 520, session.notesWidth);
+			let workspaceWidth = session.content?.getBoundingClientRect?.().width || session.win.innerWidth;
+			if (width >= 100) {
+				session.notesWidth = this._clampNumber(
+					width,
+					320,
+					this._getResponsiveNotesMaximum(session.win, workspaceWidth),
+					session.notesWidth
+				);
+				session.notesWidthRatio = this._clampNumber(
+					session.notesWidth / Math.max(1, workspaceWidth),
+					0.18,
+					0.48,
+					session.notesWidthRatio
+				);
+			}
 		}
 		this._writeJSONPref("extensions.zotero-split-screen.ui-state", {
 			sourcesCollapsed: session.sourcesCollapsed,
 			notesCollapsed: session.notesCollapsed,
 			sourcesWidth: Math.round(session.sourcesWidth),
 			notesWidth: Math.round(session.notesWidth),
-			noteView: session.noteView
+			notesWidthRatio: Number(session.notesWidthRatio.toFixed(4)),
+			noteView: session.noteView,
+			relationsVisible: session.relationsVisible,
+			lastRelationType: session.lastRelationType
 		});
 	},
 
@@ -843,6 +1187,7 @@ ZoteroSplitScreen = {
 		while (session.panes.length > targetCount) {
 			let pane = session.panes.pop();
 			pane.disposed = true;
+			this._detachRelationTracking(pane);
 			pane.pendingAttachment = null;
 			pane.loadToken++;
 			try { pane.preview?.uninit(); }
@@ -965,6 +1310,297 @@ ZoteroSplitScreen = {
 		}
 	},
 
+	_buildRelationsPanel(session) {
+		let doc = session.win.document;
+		let intro = this._createXUL(doc, "description", {
+			class: "zss-panel-hint",
+			value: "在任一 PDF 中选中文字，点击“设为起点”；再选择另一段文字并点击“连接”。"
+		});
+		let controls = this._createXUL(doc, "hbox", { align: "center", class: "zss-relation-controls" });
+		let visibility = this._createXUL(doc, "toolbarbutton", {
+			label: "显示连线",
+			type: "checkbox",
+			checked: session.relationsVisible ? "true" : "false",
+			class: "zss-relation-control"
+		});
+		let cancel = this._createXUL(doc, "toolbarbutton", {
+			label: "取消起点",
+			class: "zss-relation-control"
+		});
+		visibility.addEventListener("command", () => {
+			session.relationsVisible = !session.relationsVisible;
+			visibility.setAttribute("checked", session.relationsVisible ? "true" : "false");
+			this._rememberPanelWidths(session);
+			this._scheduleRelationOverlay(session);
+		});
+		cancel.addEventListener("command", () => this._cancelPendingRelation(session));
+		controls.append(visibility, cancel);
+		let summary = this._createXUL(doc, "label", { value: "", class: "zss-relation-summary" });
+		let list = this._createHTML(doc, "div", { class: "zss-relation-list" });
+		session.relationVisibilityButton = visibility;
+		session.relationCancelButton = cancel;
+		session.relationSummary = summary;
+		session.relationList = list;
+		session.relationsHost.append(intro, controls, summary, list);
+		this._renderRelationsPanel(session);
+	},
+
+	_renderRelationsPanel(session, focusedID = null) {
+		let list = session?.relationList;
+		if (!list) return;
+		list.replaceChildren();
+		session.relationCancelButton?.toggleAttribute("disabled", !session.pendingRelationStart);
+		let pendingText = session.pendingRelationStart
+			? ` · 已设置起点：${session.pendingRelationStart.quote.slice(0, 30)}`
+			: "";
+		session.relationSummary?.setAttribute("value", `${session.relations.length} 条关系${pendingText}`);
+		if (!session.relations.length) {
+			let empty = this._createHTML(session.win.document, "div", { class: "zss-relation-empty" });
+			empty.textContent = "还没有跨文献关系。选中两段原文后，它们会在这里形成可跳转的关系卡片。";
+			list.appendChild(empty);
+			return;
+		}
+		for (let relation of session.relations.slice().reverse()) {
+			let type = this._getRelationType(relation.type);
+			let card = this._createHTML(session.win.document, "article", { class: "zss-relation-card" });
+			card.dataset.relationId = relation.id;
+			card.toggleAttribute("data-zss-focused", relation.id === focusedID);
+			card.style.setProperty("--zss-relation-color", type.color);
+			let header = this._createHTML(session.win.document, "div", { class: "zss-relation-card-header" });
+			let typeSelect = this._createHTML(session.win.document, "select", {
+				class: "zss-relation-type-select",
+				title: "选择关系类型"
+			});
+			for (let optionType of this.relationTypes) {
+				let option = this._createHTML(session.win.document, "option", { value: optionType.id });
+				option.textContent = optionType.label;
+				typeSelect.appendChild(option);
+			}
+			typeSelect.value = relation.type;
+			let labelInput = this._createHTML(session.win.document, "input", {
+				type: "text",
+				class: "zss-relation-label-input",
+				maxlength: "120",
+				placeholder: "输入关系说明"
+			});
+			labelInput.value = relation.label;
+			let remove = this._createHTML(session.win.document, "button", { type: "button", class: "zss-relation-action", title: "删除关系" });
+			remove.textContent = "删除";
+			typeSelect.addEventListener("change", () => {
+				let previousType = this._getRelationType(relation.type);
+				let nextType = this._getRelationType(typeSelect.value);
+				relation.type = nextType.id;
+				session.lastRelationType = nextType.id;
+				if (!labelInput.value.trim() || labelInput.value.trim() === previousType.label) {
+					labelInput.value = nextType.label;
+					relation.label = nextType.label;
+				}
+				relation.updatedAt = Date.now();
+				card.style.setProperty("--zss-relation-color", nextType.color);
+				this._persistRelations(session);
+				this._scheduleRelationOverlay(session);
+			});
+			labelInput.addEventListener("input", () => {
+				relation.label = labelInput.value.trim().slice(0, 120) || this._getRelationType(relation.type).label;
+				relation.updatedAt = Date.now();
+				this._scheduleRelationOverlay(session);
+			});
+			labelInput.addEventListener("change", () => this._persistRelations(session));
+			for (let eventName of ["keydown", "keypress", "keyup"]) {
+				labelInput.addEventListener(eventName, event => event.stopPropagation());
+				typeSelect.addEventListener(eventName, event => event.stopPropagation());
+			}
+			remove.addEventListener("click", () => this._deleteRelation(session, relation));
+			header.append(typeSelect, labelInput, remove);
+			card.appendChild(header);
+			for (let [endpointName, anchor] of [["A", relation.start], ["B", relation.end]]) {
+				let endpoint = this._createHTML(session.win.document, "button", {
+					type: "button",
+					class: "zss-relation-endpoint",
+					title: `跳转到第 ${anchor.pageIndex + 1} 页`
+				});
+				let meta = this._createHTML(session.win.document, "span", { class: "zss-relation-endpoint-meta" });
+				meta.textContent = `${endpointName} · 第 ${anchor.pageIndex + 1} 页 · ${anchor.title || "PDF"}`;
+				let quote = this._createHTML(session.win.document, "span", { class: "zss-relation-quote" });
+				quote.textContent = anchor.quote;
+				endpoint.append(meta, quote);
+				endpoint.addEventListener("click", () => this._navigateToRelationAnchor(session, anchor));
+				card.appendChild(endpoint);
+			}
+			list.appendChild(card);
+		}
+		if (focusedID) {
+			let focused = Array.from(list.children).find(card => card.dataset?.relationId === focusedID);
+			focused?.scrollIntoView?.({ block: "nearest" });
+		}
+	},
+
+	_deleteRelation(session, relation) {
+		if (!Services.prompt.confirm(session.win, "删除文献关系", `确定删除“${relation.label}”这条关系吗？`)) return;
+		session.relations = session.relations.filter(item => item.id !== relation.id);
+		this._persistRelations(session);
+		this._renderRelationsPanel(session);
+		this._scheduleRelationOverlay(session);
+	},
+
+	async _navigateToRelationAnchor(session, anchor) {
+		let pane = session.panes.find(item => item.attachment?.id === anchor.attachmentID);
+		if (!pane) {
+			let attachment = session.sources.find(item => item.id === anchor.attachmentID)
+				|| Zotero.Items.get(anchor.attachmentID);
+			pane = session.panes[session.activePaneIndex] || session.panes[0];
+			if (!attachment || !pane) return;
+			await this._setPaneAttachment(session, pane, attachment);
+		}
+		this._setActivePane(session, session.panes.indexOf(pane));
+		try {
+			await pane.preview?.navigate({ pageIndex: anchor.pageIndex });
+			this._setNoteStatus(session, `已定位到第 ${anchor.pageIndex + 1} 页：${anchor.quote.slice(0, 45)}`);
+			session.win.setTimeout(() => this._scheduleRelationOverlay(session), 120);
+		}
+		catch (error) {
+			Zotero.logError(error);
+		}
+	},
+
+	_ensureRelationOverlay(session) {
+		if (session.relationOverlay?.isConnected) return session.relationOverlay;
+		let svg = this._createSVG(session.win.document, "svg", {
+			class: "zss-relation-overlay",
+			"aria-hidden": "true",
+			preserveAspectRatio: "none"
+		});
+		session.relationOverlay = svg;
+		session.grid.appendChild(svg);
+		return svg;
+	},
+
+	_scheduleRelationOverlay(session) {
+		if (!session?.root?.isConnected) return;
+		if (session.relationRAF) session.win.cancelAnimationFrame(session.relationRAF);
+		session.noteResizeCleanup?.();
+		session.relationRAF = session.win.requestAnimationFrame(() => {
+			session.relationRAF = null;
+			this._renderRelationOverlay(session);
+		});
+	},
+
+	_renderRelationOverlay(session) {
+		if (!session.relationsVisible || !session.relations.length) {
+			session.relationOverlay?.remove();
+			session.relationOverlay = null;
+			return;
+		}
+		let svg = this._ensureRelationOverlay(session);
+		let gridRect = session.grid.getBoundingClientRect();
+		let width = Math.max(1, gridRect.width);
+		let height = Math.max(1, gridRect.height);
+		svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+		let defs = this._createSVG(session.win.document, "defs");
+		for (let type of this.relationTypes) {
+			let marker = this._createSVG(session.win.document, "marker", {
+				id: `zss-arrow-${type.id}`,
+				viewBox: "0 0 10 10",
+				refX: "9",
+				refY: "5",
+				markerWidth: "7",
+				markerHeight: "7",
+				orient: "auto-start-reverse"
+			});
+			let arrow = this._createSVG(session.win.document, "path", { d: "M 0 0 L 10 5 L 0 10 z", fill: type.color });
+			marker.appendChild(arrow);
+			defs.appendChild(marker);
+		}
+		svg.replaceChildren(defs);
+		for (let relation of session.relations) {
+			let start = this._getRelationAnchorPoint(session, relation.start, gridRect);
+			let end = this._getRelationAnchorPoint(session, relation.end, gridRect);
+			if (!start || !end) continue;
+			let type = this._getRelationType(relation.type);
+			let group = this._createSVG(session.win.document, "g", { class: "zss-relation-line-group" });
+			group.dataset.relationId = relation.id;
+			let dx = end.x - start.x;
+			let dy = end.y - start.y;
+			let curve = Math.min(70, Math.max(22, Math.hypot(dx, dy) * 0.12));
+			let controlX = (start.x + end.x) / 2 + (Math.abs(dy) > Math.abs(dx) ? curve : 0);
+			let controlY = (start.y + end.y) / 2 - (Math.abs(dx) >= Math.abs(dy) ? curve : 0);
+			let path = this._createSVG(session.win.document, "path", {
+				class: "zss-relation-line",
+				d: `M ${start.x} ${start.y} Q ${controlX} ${controlY} ${end.x} ${end.y}`,
+				stroke: type.color,
+				"stroke-dasharray": type.dash,
+				"marker-end": `url(#zss-arrow-${type.id})`
+			});
+			if (!start.visible || !end.visible) path.setAttribute("opacity", "0.62");
+			let labelX = 0.25 * start.x + 0.5 * controlX + 0.25 * end.x;
+			let labelY = 0.25 * start.y + 0.5 * controlY + 0.25 * end.y;
+			let displayLabel = relation.label.slice(0, 18);
+			let labelWidth = Math.min(170, Math.max(46, displayLabel.length * 12 + 16));
+			let labelGroup = this._createSVG(session.win.document, "g", {
+				class: "zss-relation-line-label",
+				transform: `translate(${labelX} ${labelY})`
+			});
+			let background = this._createSVG(session.win.document, "rect", {
+				x: -labelWidth / 2,
+				y: -11,
+				width: labelWidth,
+				height: 22,
+				rx: 6,
+				fill: type.color
+			});
+			let text = this._createSVG(session.win.document, "text", {
+				"text-anchor": "middle",
+				"dominant-baseline": "central"
+			});
+			text.textContent = displayLabel;
+			labelGroup.append(background, text);
+			labelGroup.addEventListener("click", () => {
+				if (session.notesCollapsed) this._toggleSidePanel(session, "notes");
+				this._setNoteView(session, "relations");
+				this._renderRelationsPanel(session, relation.id);
+			});
+			group.append(path, labelGroup);
+			svg.appendChild(group);
+		}
+	},
+
+	_getRelationAnchorPoint(session, anchor, gridRect) {
+		let pane = session.panes.find(item => item.attachment?.id === anchor.attachmentID);
+		let readerWindow = pane?.preview?._internalReader?._primaryView?._iframeWindow;
+		if (!pane || !readerWindow) return null;
+		let page = readerWindow.document.querySelector(`.page[data-page-number="${anchor.pageIndex + 1}"]`);
+		if (!page) return null;
+		let pageRect = page.getBoundingClientRect();
+		let localX = pageRect.left + pageRect.width * anchor.x;
+		let localY = pageRect.top + pageRect.height * anchor.y;
+		let appScreenX = Number(session.win.mozInnerScreenX);
+		let appScreenY = Number(session.win.mozInnerScreenY);
+		let readerScreenX = Number(readerWindow.mozInnerScreenX);
+		let readerScreenY = Number(readerWindow.mozInnerScreenY);
+		let x;
+		let y;
+		if ([appScreenX, appScreenY, readerScreenX, readerScreenY].every(Number.isFinite)) {
+			x = readerScreenX + localX - appScreenX - gridRect.left;
+			y = readerScreenY + localY - appScreenY - gridRect.top;
+		}
+		else {
+			let hostRect = pane.host.getBoundingClientRect();
+			x = hostRect.left - gridRect.left + localX * hostRect.width / Math.max(1, readerWindow.innerWidth);
+			y = hostRect.top - gridRect.top + localY * hostRect.height / Math.max(1, readerWindow.innerHeight);
+		}
+		let hostRect = pane.host.getBoundingClientRect();
+		let minimumX = hostRect.left - gridRect.left + 5;
+		let maximumX = hostRect.right - gridRect.left - 5;
+		let minimumY = hostRect.top - gridRect.top + 5;
+		let maximumY = hostRect.bottom - gridRect.top - 5;
+		let visible = x >= minimumX && x <= maximumX && y >= minimumY && y <= maximumY;
+		return {
+			x: this._clampNumber(x, minimumX, maximumX, (minimumX + maximumX) / 2),
+			y: this._clampNumber(y, minimumY, maximumY, (minimumY + maximumY) / 2),
+			visible
+		};
+	},
+
 	async _initializeNativeNote(session) {
 		try {
 			let storedID = Number(Zotero.Prefs.get(session.noteIDKey, true));
@@ -1084,11 +1720,13 @@ ZoteroSplitScreen = {
 	},
 
 	_setNoteView(session, view) {
-		if (!session?.noteDeck || !["native", "structured"].includes(view)) return;
+		if (!session?.noteDeck || !["native", "structured", "relations"].includes(view)) return;
 		session.noteView = view;
-		session.noteDeck.selectedIndex = view === "native" ? 0 : 1;
+		session.noteDeck.selectedIndex = { native: 0, structured: 1, relations: 2 }[view];
 		session.noteTabs.native.toggleAttribute("data-zss-selected", view === "native");
 		session.noteTabs.structured.toggleAttribute("data-zss-selected", view === "structured");
+		session.noteTabs.relations.toggleAttribute("data-zss-selected", view === "relations");
+		if (view === "relations") this._renderRelationsPanel(session);
 		if (session.root?.isConnected) this._rememberPanelWidths(session);
 	},
 
@@ -1231,12 +1869,20 @@ ZoteroSplitScreen = {
 		try { session.noteEditor?.saveSync?.(); }
 		catch (error) { Zotero.logError(error); }
 		if (session.structuredData) this._writeJSONPref(session.structuredKey, session.structuredData);
+		if (session.relations) this._writeJSONPref(session.relationsKey, session.relations);
 		this._rememberPanelWidths(session);
 		this._persistWorkspaceState(session);
 		if (session.syncTimer) session.win.clearInterval(session.syncTimer);
 		if (session.noteSaveTimer) session.win.clearTimeout(session.noteSaveTimer);
+		if (session.relationRAF) session.win.cancelAnimationFrame(session.relationRAF);
+		if (session.relationWindowResize) session.win.removeEventListener("resize", session.relationWindowResize);
+		session.workspaceResizeObserver?.disconnect?.();
+		if (session.screenChangeListener) {
+			session.win.screen?.removeEventListener?.("change", session.screenChangeListener);
+		}
 		for (let pane of session.panes) {
 			pane.disposed = true;
+			this._detachRelationTracking(pane);
 			pane.pendingAttachment = null;
 			pane.loadToken++;
 			try { pane.preview?.uninit(); }
@@ -1346,6 +1992,42 @@ ZoteroSplitScreen = {
 		let number = Number(value);
 		if (!Number.isFinite(number)) number = fallback;
 		return Math.min(maximum, Math.max(minimum, number));
+	},
+
+	_getResponsiveNotesMaximum(win, availableWidth = null) {
+		let viewportWidth = Number(availableWidth) || Number(win?.innerWidth) || 1024;
+		return Math.max(320, Math.min(680, Math.floor(viewportWidth * 0.48)));
+	},
+
+	_getWorkspaceAvailableWidth(session) {
+		let candidates = [
+			Number(session?.win?.innerWidth),
+			Number(session?.container?.clientWidth),
+			Number(session?.container?.getBoundingClientRect?.().width),
+			Number(session?.content?.clientWidth),
+			Number(session?.content?.getBoundingClientRect?.().width)
+		].filter(width => Number.isFinite(width) && width > 0);
+		return candidates.length ? Math.min(...candidates) : 1024;
+	},
+
+	_adaptWorkspaceToSize(session) {
+		if (!session?.root?.isConnected) return;
+		let workspaceWidth = this._getWorkspaceAvailableWidth(session);
+		session.root.toggleAttribute("data-zss-compact", workspaceWidth < 1750);
+		if (!session.notesCollapsed) {
+			let maximum = this._getResponsiveNotesMaximum(session.win, workspaceWidth);
+			let targetWidth = this._clampNumber(
+				Math.round(workspaceWidth * session.notesWidthRatio),
+				320,
+				maximum,
+				session.notesWidth
+			);
+			if (Math.abs(targetWidth - session.notesWidth) >= 2) {
+				session.notesWidth = targetWidth;
+				this._applyPanelState(session, "notes");
+			}
+		}
+		this._scheduleRelationOverlay(session);
 	},
 
 	_alert(win, title, message) {

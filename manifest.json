@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Zotero 论文分屏",
-  "version": "0.4.3",
+  "version": "0.5.7",
   "description": "在 Zotero 主窗口的对比工作台中并排阅读、切换和对照多篇 PDF 文献。",
   "author": "Zotero Split Screen contributors",
   "icons": {
