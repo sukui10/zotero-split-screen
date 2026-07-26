@@ -1,0 +1,459 @@
+.zss-workspace {
+  background: var(--material-background, #f7f7f8);
+  min-width: 0;
+}
+
+.zss-toolbar {
+  min-height: 42px;
+  padding: 5px 8px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  background: color-mix(in srgb, var(--material-background, #fff) 92%, #b51c2c 8%);
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+}
+
+.zss-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #a51527;
+}
+
+.zss-toolbar-button {
+  margin-inline-start: 4px;
+  flex-shrink: 0;
+}
+
+.zss-content {
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+}
+
+.zss-sources,
+.zss-notes {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 8px;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--material-background, #fff) 96%, #8b95a1 4%);
+}
+
+.zss-sources {
+  max-width: 320px;
+}
+
+.zss-sources {
+  border-inline-end: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.zss-notes {
+  max-width: min(52vw, 520px);
+  border-inline-start: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.zss-sources[data-zss-collapsed],
+.zss-notes[data-zss-collapsed] {
+  width: 34px !important;
+  min-width: 34px !important;
+  max-width: 34px !important;
+  padding: 3px 1px;
+}
+
+.zss-sources[data-zss-collapsed] .zss-panel-title,
+.zss-sources[data-zss-collapsed] .zss-panel-action,
+.zss-sources[data-zss-collapsed] .zss-panel-body,
+.zss-notes[data-zss-collapsed] .zss-panel-title,
+.zss-notes[data-zss-collapsed] .zss-panel-body {
+  display: none;
+}
+
+.zss-panel-splitter {
+  min-width: 4px;
+  width: 4px;
+  cursor: col-resize;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.zss-panel-splitter:hover {
+  background: color-mix(in srgb, #b51c2c 38%, transparent);
+}
+
+.zss-panel-heading {
+  min-height: 28px;
+  min-width: 0;
+}
+
+.zss-panel-collapse {
+  min-width: 25px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.zss-notes-collapse {
+  flex: 0 0 auto;
+  min-width: 60px;
+  margin-inline-end: 5px;
+  font-size: 11px;
+}
+
+.zss-notes[data-zss-collapsed] .zss-notes-collapse {
+  min-width: 28px;
+  width: 28px;
+  margin: 0;
+  font-size: 17px;
+}
+
+.zss-panel-action {
+  font-size: 11px;
+}
+
+.zss-panel-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.zss-panel-hint {
+  margin: 3px 0 8px;
+  opacity: .68;
+  font-size: 11px;
+}
+
+.zss-panel-body,
+.zss-note-deck,
+.zss-native-note-host,
+.zss-structured-host,
+.zss-native-note-editor {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.zss-native-note-editor {
+  width: auto;
+  max-width: 100%;
+  flex: 1 1 0;
+}
+
+.zss-native-note-editor > box,
+.zss-native-note-editor #note-editor,
+.zss-native-note-editor #editor-view {
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The comparison workspace already owns the note's library context. Hiding
+   Zotero's metadata footer leaves the limited panel height for editable text. */
+.zss-native-note-editor #links-container {
+  display: none !important;
+}
+
+.zss-source-search {
+  width: 100%;
+  margin: 0 0 7px;
+  padding: 5px 7px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 6px;
+  background: var(--material-background, #fff);
+  color: inherit;
+}
+
+.zss-source-list {
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+}
+
+.zss-source-card {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  margin: 0 0 6px;
+  padding: 4px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--material-background, #fff) 97%, currentColor 3%);
+}
+
+.zss-source-card[data-zss-visible] {
+  color: #a51527;
+  background: color-mix(in srgb, #b51c2c 10%, transparent);
+  font-weight: 600;
+}
+
+.zss-source-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 3px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.zss-source-title {
+  display: -webkit-box;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.zss-source-badge,
+.zss-source-slot,
+.zss-compare-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.zss-source-badge:empty {
+  display: none;
+}
+
+.zss-source-badge:not(:empty) {
+  color: #fff;
+}
+
+.zss-source-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.zss-source-slot {
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.zss-reader-grid,
+.zss-grid-rows,
+.zss-grid-row {
+  min-width: 0;
+  min-height: 0;
+}
+
+.zss-reader-grid {
+  padding: 8px;
+  background: #e7eaee;
+}
+
+.zss-reader-pane {
+  min-width: 0;
+  min-height: 0;
+  margin: 3px;
+  border: 1px solid #c6cbd2;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.zss-reader-pane[data-zss-active] {
+  border: 2px solid #b51c2c;
+  box-shadow: 0 0 0 1px #b51c2c33;
+}
+
+.zss-pane-header {
+  min-height: 31px;
+  padding: 0 7px;
+  background: #f5f6f8;
+  border-bottom: 1px solid #d7dbe1;
+}
+
+.zss-pane-marker {
+  min-width: 45px;
+  color: #b51c2c;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.zss-pane-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.zss-pane-page-button {
+  min-width: 24px;
+  margin-inline-start: 3px;
+  font-size: 19px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.zss-pane-switch {
+  margin-inline-start: 5px;
+  font-size: 11px;
+}
+
+.zss-note-actions {
+  min-height: 28px;
+  min-width: 0;
+  overflow: hidden;
+  margin: 6px 0 0;
+}
+
+.zss-note-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  opacity: .72;
+}
+
+.zss-note-save {
+  flex: 0 0 auto;
+  min-width: 66px;
+  margin-inline-start: 5px;
+  font-size: 11px;
+}
+
+.zss-note-tabs {
+  margin: 0 0 6px;
+  padding: 2px;
+  border-radius: 7px;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.zss-note-tab {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.zss-note-tab[data-zss-selected] {
+  color: #a51527;
+  font-weight: 700;
+  background: var(--material-background, #fff);
+}
+
+.zss-note-loading {
+  margin: auto;
+  opacity: .65;
+}
+
+.zss-structured-host {
+  overflow: hidden;
+}
+
+.zss-structured-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline-end: 3px;
+}
+
+.zss-compare-field {
+  margin: 0 0 7px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--material-background, #fff) 97%, currentColor 3%);
+}
+
+.zss-compare-heading {
+  margin: 0 0 5px;
+  font-size: 12px;
+}
+
+.zss-compare-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 0 0 4px;
+}
+
+.zss-compare-slot {
+  flex: 0 0 20px;
+  margin-top: 3px;
+  color: #fff;
+}
+
+.zss-slot-a {
+  background: #b51c2c;
+}
+
+.zss-slot-b {
+  background: #2d67b1;
+}
+
+.zss-compare-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 6px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: 5px;
+  resize: vertical;
+  background: var(--material-background, #fff);
+  color: inherit;
+  font: menu;
+  line-height: 1.35;
+}
+
+.zss-structured-sync {
+  margin-top: 6px;
+  min-height: 30px;
+  color: #a51527;
+  font-weight: 700;
+}
+
+.zss-preview-host,
+.zss-preview-browser {
+  min-width: 0;
+  min-height: 0;
+}
+
+.zss-note-editor {
+  flex: 1;
+  width: 100%;
+  min-height: 160px;
+  padding: 8px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 6px;
+  background: var(--material-background, #fff);
+  color: inherit;
+  font: menu;
+  line-height: 1.5;
+  resize: none;
+  user-select: text;
+  pointer-events: auto;
+  cursor: text;
+}
+
+.zss-load-error {
+  margin: auto;
+  color: #a51527;
+}
+
+@media (prefers-color-scheme: dark) {
+  .zss-reader-grid { background: #25282d; }
+  .zss-reader-pane { background: #303238; border-color: #50545d; }
+  .zss-pane-header { background: #3b3e44; border-color: #50545d; }
+  .zss-toolbar { background: #303238; }
+}
